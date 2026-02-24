@@ -17,8 +17,8 @@ def mock_env(monkeypatch):
         "COGNITO_JWKS_URI",
         "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_FAKE/.well-known/jwks.json",
     )
-    monkeypatch.setenv("COGNITO_AUDIENCE", "fake-client-id")
     monkeypatch.setenv("MCP_RESOURCE_URL", "https://example.ts.net")
+    monkeypatch.setenv("COGNITO_PUBLIC_CLIENT_ID", "fake-public-client-id")
 
 
 @pytest.fixture

@@ -83,33 +83,16 @@ async def _oauth_register(request: Request) -> JSONResponse:
         )
 
     body = await request.json()
-    redirect_uris = body.get("redirect_uris", [])
-    client_name = body.get("client_name", "unknown")
-    token_auth_method = body.get("token_endpoint_auth_method", "none")
-
-    # Return the public client (no secret) for public clients,
-    # or the confidential client for clients that support secrets
-    if token_auth_method == "none":
-        client_id = os.environ["COGNITO_PUBLIC_CLIENT_ID"]
-    else:
-        client_id = os.environ["COGNITO_AUDIENCE"]
-
-    response: dict = {
-        "client_id": client_id,
-        "client_name": client_name,
-        "redirect_uris": redirect_uris,
-        "grant_types": ["authorization_code", "refresh_token"],
-        "response_types": ["code"],
-        "token_endpoint_auth_method": token_auth_method,
-    }
-
-    # Provide the secret for confidential clients
-    client_secret = os.environ.get("COGNITO_CLIENT_SECRET")
-    if client_secret and token_auth_method != "none":
-        response["client_secret"] = client_secret
 
     return JSONResponse(
-        response,
+        {
+            "client_id": os.environ["COGNITO_PUBLIC_CLIENT_ID"],
+            "client_name": body.get("client_name", "unknown"),
+            "redirect_uris": body.get("redirect_uris", []),
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        },
         status_code=201,
         headers={
             "Access-Control-Allow-Origin": "*",
