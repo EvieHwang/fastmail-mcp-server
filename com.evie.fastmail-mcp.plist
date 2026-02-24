@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.evie.fastmail-mcp</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/evehwang/projects/fastmail-mcp-server/.venv/bin/python3</string>
+        <string>server.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/evehwang/projects/fastmail-mcp-server</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>FASTMAIL_API_TOKEN</key>
+        <string>fmu1-f4de4058-b216784476a802d1b60fe5dd70eee6a6-0-03e645af545fc8cbde2c8323934fa871</string>
+        <key>FASTMAIL_BASE_URL</key>
+        <string>https://api.fastmail.com</string>
+        <key>COGNITO_ISSUER_URL</key>
+        <string>https://cognito-idp.us-east-1.amazonaws.com/us-east-1_4Y1JyaYkC</string>
+        <key>COGNITO_JWKS_URI</key>
+        <string>https://cognito-idp.us-east-1.amazonaws.com/us-east-1_4Y1JyaYkC/.well-known/jwks.json</string>
+        <key>COGNITO_AUDIENCE</key>
+        <string>7fpn72blplen9j2rdc7rj49cb1</string>
+        <key>MCP_RESOURCE_URL</key>
+        <string>https://eviebot.tailf90db7.ts.net:8443</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/evehwang/Library/Logs/fastmail-mcp/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/evehwang/Library/Logs/fastmail-mcp/stderr.log</string>
+</dict>
+</plist>
