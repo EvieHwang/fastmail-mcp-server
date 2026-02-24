@@ -50,9 +50,7 @@ All tools are annotated as read-only and non-destructive.
 Create a Cognito User Pool with:
 - Email-based login
 - A single user account
-- **Two App Clients:**
-  - A **confidential** client (with secret) — for clients that support `client_secret_basic`/`client_secret_post`
-  - A **public** client (no secret) — for clients like claude.ai that use `token_endpoint_auth_method: none`
+- A **public** App Client (no secret) — claude.ai registers as a public client via DCR
 - Redirect URIs: `https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback`
 - Allowed OAuth scopes: `openid`, `email`
 - Custom domain (e.g. `auth.yourdomain.com`) with ACM certificate
@@ -67,9 +65,7 @@ FASTMAIL_BASE_URL=https://api.fastmail.com
 # Cognito
 COGNITO_ISSUER_URL=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXXXX
 COGNITO_JWKS_URI=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXXXX/.well-known/jwks.json
-COGNITO_AUDIENCE=<confidential-client-id>
-COGNITO_PUBLIC_CLIENT_ID=<public-client-id>
-COGNITO_CLIENT_SECRET=<confidential-client-secret>
+COGNITO_PUBLIC_CLIENT_ID=<public-app-client-id>
 
 # Server
 MCP_RESOURCE_URL=https://your-tailscale-funnel-url
@@ -115,7 +111,7 @@ Getting OAuth to work with claude.ai required solving several compatibility issu
 
 - **Standard port 443 only.** Claude.ai's infrastructure cannot reach non-standard ports (8443, 8080, etc.).
 - **RFC 8414 OAuth AS metadata** at `/.well-known/oauth-authorization-server`. If your auth provider only serves OIDC metadata (like Cognito), you need to proxy it at this path.
-- **Dynamic Client Registration (DCR)** is mandatory. Claude.ai POSTs to `registration_endpoint` to get client credentials. You need an endpoint that returns your pre-registered App Client ID (and secret for confidential clients).
+- **Dynamic Client Registration (DCR)** is mandatory. Claude.ai POSTs to `registration_endpoint` to get client credentials. You need an endpoint that returns your pre-registered public App Client ID.
 - **Required metadata fields** that Cognito doesn't advertise:
   - `code_challenge_methods_supported: ["S256"]`
   - `grant_types_supported: ["authorization_code", "refresh_token"]`
@@ -126,8 +122,8 @@ Getting OAuth to work with claude.ai required solving several compatibility issu
 ### Gotchas
 
 - **Pydantic `AnyHttpUrl` trailing slash.** `AnyHttpUrl("https://example.com")` serializes to `"https://example.com/"`, causing clients to construct `https://example.com//.well-known/...` (double slash) which 404s. Build metadata JSON dicts manually with `str(url).rstrip("/")`, or add middleware to normalize double slashes.
-- **Cognito access tokens don't have an `aud` claim.** They use `client_id` instead. If you have multiple App Clients, you may need to skip audience validation and rely on issuer validation alone.
-- **Two App Clients needed.** Claude.ai registers as a public client (`token_endpoint_auth_method: none`), so you need a client without a secret. Your DCR endpoint should return the appropriate client based on the requested auth method.
+- **Cognito access tokens don't have an `aud` claim.** They use `client_id` instead. Skip audience validation in JWTVerifier and rely on issuer validation alone.
+- **Public client only.** Claude.ai registers as a public client (`token_endpoint_auth_method: none`), so create a Cognito App Client without a secret. The DCR endpoint returns this client ID — no secrets are ever exposed.
 - **FastMCP's `RemoteAuthProvider`** registers `/.well-known/oauth-protected-resource` at a path-suffixed URL (e.g. `/.well-known/oauth-protected-resource/mcp`). Claude.ai also needs it at the root path — add a custom route.
 
 ### OAuth Flow (what claude.ai does)
