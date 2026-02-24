@@ -42,6 +42,11 @@ async def _get_cognito_metadata() -> dict:
     # DCR endpoint — claude.ai requires this
     metadata["registration_endpoint"] = f"{base_url}/oauth/register"
 
+    # RFC 8414 requires issuer to match the authorization server URL.
+    # Our protected resource metadata advertises our server as the auth server
+    # (so we can proxy Cognito's metadata), so issuer must match.
+    metadata["issuer"] = base_url
+
     _cognito_metadata_cache = metadata
     return metadata
 
