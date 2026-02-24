@@ -1,6 +1,7 @@
 from fastmcp import FastMCP
+from starlette.middleware import Middleware
 
-from auth import create_auth_provider
+from auth import SlashNormalizationMiddleware, create_auth_provider
 from tools import get_email, get_thread, list_emails, list_mailboxes, search_emails
 
 mcp = FastMCP(
@@ -28,4 +29,9 @@ mcp.tool(annotations=TOOL_ANNOTATIONS)(search_emails)
 mcp.tool(annotations=TOOL_ANNOTATIONS)(get_thread)
 
 if __name__ == "__main__":
-    mcp.run(transport="http", host="127.0.0.1", port=8000)
+    mcp.run(
+        transport="http",
+        host="127.0.0.1",
+        port=8000,
+        middleware=[Middleware(SlashNormalizationMiddleware)],
+    )

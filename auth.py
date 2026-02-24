@@ -1,18 +1,21 @@
 import os
+import re
 
 import httpx
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.auth import cors_middleware
 from fastmcp.server.auth.providers.jwt import JWTVerifier
-from mcp.server.auth.handlers.metadata import ProtectedResourceMetadataHandler
-from mcp.shared.auth import ProtectedResourceMetadata
 from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 # Cache the Cognito OIDC metadata
 _cognito_metadata_cache: dict | None = None
+
+# Regex to collapse repeated slashes in URL paths (e.g. //foo → /foo)
+_DOUBLE_SLASH_RE = re.compile(r"/{2,}")
 
 
 async def _get_cognito_metadata() -> dict:
@@ -114,40 +117,69 @@ async def _oauth_register(request: Request) -> JSONResponse:
     )
 
 
+class SlashNormalizationMiddleware:
+    """ASGI middleware that collapses double slashes in URL paths.
+
+    Pydantic's AnyHttpUrl adds a trailing slash to domain-only URLs, so
+    authorization_servers becomes "https://host:8443/". Clients then construct
+    "https://host:8443//.well-known/..." which 404s without this middleware.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and "//" in scope["path"]:
+            scope["path"] = _DOUBLE_SLASH_RE.sub("/", scope["path"])
+        await self.app(scope, receive, send)
+
+
+def _protected_resource_metadata_json(base_url: str, mcp_path: str) -> dict:
+    """Build protected resource metadata dict with clean URLs (no trailing slashes)."""
+    return {
+        "resource": f"{base_url}{mcp_path}",
+        "authorization_servers": [base_url],
+        "scopes_supported": [],
+        "bearer_methods_supported": ["header"],
+    }
+
+
 class CognitoAuthProvider(RemoteAuthProvider):
     """RemoteAuthProvider adapted for Cognito + claude.ai.
 
-    Handles three compatibility issues:
+    Handles four compatibility issues:
     1. Serves /.well-known/oauth-protected-resource at root (without /mcp suffix)
     2. Proxies Cognito OIDC metadata as OAuth AS metadata (RFC 8414)
     3. Provides a DCR endpoint that returns pre-registered Cognito client credentials
+    4. Normalizes double-slash paths caused by AnyHttpUrl trailing slashes
     """
 
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         routes = super().get_routes(mcp_path)
 
         if self.base_url and mcp_path:
-            resource_url = self._get_resource_url(mcp_path)
-            if resource_url:
-                metadata = ProtectedResourceMetadata(
-                    resource=resource_url,
-                    authorization_servers=self.authorization_servers,
-                    scopes_supported=(
-                        self._scopes_supported
-                        if self._scopes_supported is not None
-                        else self.token_verifier.scopes_supported
+            base_url = str(self.base_url).rstrip("/")
+            metadata = _protected_resource_metadata_json(base_url, mcp_path)
+
+            async def _root_protected_resource(request: Request) -> JSONResponse:
+                return JSONResponse(
+                    metadata,
+                    headers={
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Methods": "GET, OPTIONS",
+                        "Cache-Control": "public, max-age=3600",
+                    },
+                )
+
+            routes.append(
+                Route(
+                    "/.well-known/oauth-protected-resource",
+                    endpoint=cors_middleware(
+                        _root_protected_resource, ["GET", "OPTIONS"]
                     ),
-                    resource_name=self.resource_name,
-                    resource_documentation=self.resource_documentation,
+                    methods=["GET", "OPTIONS"],
                 )
-                handler = ProtectedResourceMetadataHandler(metadata)
-                routes.append(
-                    Route(
-                        "/.well-known/oauth-protected-resource",
-                        endpoint=cors_middleware(handler.handle, ["GET", "OPTIONS"]),
-                        methods=["GET", "OPTIONS"],
-                    )
-                )
+            )
 
         # OAuth AS metadata (proxied from Cognito OIDC)
         routes.append(

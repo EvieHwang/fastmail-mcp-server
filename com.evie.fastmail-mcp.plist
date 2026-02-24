@@ -27,7 +27,7 @@
         <key>COGNITO_AUDIENCE</key>
         <string>7fpn72blplen9j2rdc7rj49cb1</string>
         <key>MCP_RESOURCE_URL</key>
-        <string>https://eviebot.tailf90db7.ts.net:8443</string>
+        <string>https://eviebot.tailf90db7.ts.net</string>
         <key>COGNITO_PUBLIC_CLIENT_ID</key>
         <string>2m0mavh487mal44dgrd9vkr07a</string>
         <key>COGNITO_CLIENT_SECRET</key>
