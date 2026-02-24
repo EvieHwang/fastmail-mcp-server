@@ -11,27 +11,36 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-# Cache the Cognito OIDC metadata so we don't fetch it on every request
+# Cache the Cognito OIDC metadata
 _cognito_metadata_cache: dict | None = None
 
 
 async def _get_cognito_metadata() -> dict:
-    """Fetch and cache Cognito OIDC metadata, augmented for OAuth AS discovery."""
+    """Fetch and cache Cognito OIDC metadata, augmented for MCP compatibility."""
     global _cognito_metadata_cache
     if _cognito_metadata_cache:
         return _cognito_metadata_cache
 
     issuer_url = os.environ["COGNITO_ISSUER_URL"]
+    base_url = os.environ["MCP_RESOURCE_URL"]
     async with httpx.AsyncClient() as client:
         r = await client.get(f"{issuer_url}/.well-known/openid-configuration")
         r.raise_for_status()
         metadata = r.json()
 
-    # Add PKCE support (Cognito supports S256 but doesn't advertise it)
+    # Fields required by MCP spec / claude.ai that Cognito doesn't advertise
     metadata["code_challenge_methods_supported"] = ["S256"]
-    # Add response type required by MCP
+    metadata["grant_types_supported"] = ["authorization_code", "refresh_token"]
+    metadata["token_endpoint_auth_methods_supported"] = [
+        "client_secret_basic",
+        "client_secret_post",
+        "none",
+    ]
     if "code" not in metadata.get("response_types_supported", []):
         metadata.setdefault("response_types_supported", []).append("code")
+
+    # DCR endpoint — claude.ai requires this
+    metadata["registration_endpoint"] = f"{base_url}/oauth/register"
 
     _cognito_metadata_cache = metadata
     return metadata
@@ -49,15 +58,64 @@ async def _oauth_authorization_server_metadata(request: Request) -> JSONResponse
     )
 
 
-class CognitoAuthProvider(RemoteAuthProvider):
-    """RemoteAuthProvider adapted for Cognito.
+async def _oauth_register(request: Request) -> JSONResponse:
+    """Dynamic Client Registration endpoint.
 
-    Fixes two compatibility issues:
-    1. Claude.ai requests /.well-known/oauth-protected-resource (no /mcp suffix)
-       but FastMCP registers it at /.well-known/oauth-protected-resource/mcp.
-    2. Cognito doesn't serve /.well-known/oauth-authorization-server (RFC 8414),
-       only /.well-known/openid-configuration. We proxy the OIDC metadata at the
-       RFC 8414 path so claude.ai can discover the OAuth endpoints.
+    Claude.ai POSTs here to register itself as an OAuth client.
+    Returns our pre-registered Cognito App Client credentials.
+    """
+    if request.method == "OPTIONS":
+        return JSONResponse(
+            {},
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            },
+        )
+
+    body = await request.json()
+    redirect_uris = body.get("redirect_uris", [])
+    client_name = body.get("client_name", "unknown")
+    token_auth_method = body.get("token_endpoint_auth_method", "none")
+
+    # Return the public client (no secret) for public clients,
+    # or the confidential client for clients that support secrets
+    if token_auth_method == "none":
+        client_id = os.environ["COGNITO_PUBLIC_CLIENT_ID"]
+    else:
+        client_id = os.environ["COGNITO_AUDIENCE"]
+
+    response: dict = {
+        "client_id": client_id,
+        "client_name": client_name,
+        "redirect_uris": redirect_uris,
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": token_auth_method,
+    }
+
+    # Provide the secret for confidential clients
+    client_secret = os.environ.get("COGNITO_CLIENT_SECRET")
+    if client_secret and token_auth_method != "none":
+        response["client_secret"] = client_secret
+
+    return JSONResponse(
+        response,
+        status_code=201,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+class CognitoAuthProvider(RemoteAuthProvider):
+    """RemoteAuthProvider adapted for Cognito + claude.ai.
+
+    Handles three compatibility issues:
+    1. Serves /.well-known/oauth-protected-resource at root (without /mcp suffix)
+    2. Proxies Cognito OIDC metadata as OAuth AS metadata (RFC 8414)
+    3. Provides a DCR endpoint that returns pre-registered Cognito client credentials
     """
 
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
@@ -66,7 +124,6 @@ class CognitoAuthProvider(RemoteAuthProvider):
         if self.base_url and mcp_path:
             resource_url = self._get_resource_url(mcp_path)
             if resource_url:
-                # Root well-known path (without /mcp suffix)
                 metadata = ProtectedResourceMetadata(
                     resource=resource_url,
                     authorization_servers=self.authorization_servers,
@@ -87,12 +144,21 @@ class CognitoAuthProvider(RemoteAuthProvider):
                     )
                 )
 
-        # Proxy Cognito OIDC metadata as OAuth AS metadata
+        # OAuth AS metadata (proxied from Cognito OIDC)
         routes.append(
             Route(
                 "/.well-known/oauth-authorization-server",
                 endpoint=_oauth_authorization_server_metadata,
                 methods=["GET", "OPTIONS"],
+            )
+        )
+
+        # Dynamic Client Registration endpoint
+        routes.append(
+            Route(
+                "/oauth/register",
+                endpoint=_oauth_register,
+                methods=["POST", "OPTIONS"],
             )
         )
 
@@ -104,14 +170,14 @@ def create_auth_provider() -> CognitoAuthProvider:
     issuer_url = os.environ["COGNITO_ISSUER_URL"]
     base_url = os.environ["MCP_RESOURCE_URL"]
 
+    # Don't validate audience — Cognito access tokens use 'client_id' claim
+    # instead of 'aud', and we have two client IDs (public + confidential).
+    # Issuer validation is sufficient for a single-user server.
     token_verifier = JWTVerifier(
         jwks_uri=os.environ["COGNITO_JWKS_URI"],
         issuer=issuer_url,
-        audience=os.environ["COGNITO_AUDIENCE"],
     )
 
-    # Point authorization_servers to our own server so claude.ai fetches
-    # /.well-known/oauth-authorization-server from us (where we proxy Cognito).
     return CognitoAuthProvider(
         token_verifier=token_verifier,
         authorization_servers=[AnyHttpUrl(base_url)],
